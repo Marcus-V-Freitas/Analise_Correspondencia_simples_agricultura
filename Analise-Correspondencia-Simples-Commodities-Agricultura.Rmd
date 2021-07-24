@@ -1,0 +1,225 @@
+---
+title: "R Notebook"
+autor: "Marcus Vinicius de Freitas Costa"
+output: html_notebook
+---
+
+#Análise de Correspondência Simples 
+
+Hoje vamos fazer uma análise de correspondência simples de Commodites adquiridas em todo o estado de Maharashtra (Índia)
+
+
+Link para o dataset Original:
+*https://www.kaggle.com/samextensibleenergy/agricultural-commodity-dataset*
+
+Primeiro vamos importar as libs necessárias
+
+```{r}
+library(tidyverse) #Manipulção de dados
+library(knitr) #Elementos gráficos
+library(kableExtra) #Elementos gráficos
+library(FactoMineR) #Análise Anacor
+library(ggrepel) #Espaçamento gráfico
+```
+
+Agora ler os dados da nossa base de dados.
+
+```{r}
+
+dados_agricultura <- read.csv('Monthly_data_cmo.csv')
+head(dados_agricultura)
+
+```
+
+Agora vamos visualizar alguns dados. Como a base é muito grande limitaremos à 1000 observações.
+
+```{r}
+
+dados_agricultura[1:1000,] %>% 
+  kable() %>%
+  kable_styling(bootstrap_options = "striped", 
+                full_width = TRUE, 
+                font_size = 12)
+```
+
+Temos alguns dados interessantes. Faremos nossa análise com duas variáveis desse dataset:
+
+*Commodity - Bem de origem primária comercializado em bolsas de mercadorias e valores. 
+*Year - Ano em que foram registrados os dados.
+
+Vamos iniciar verificando os valores únicos dos anos.
+
+```{r}
+
+unique(dados_agricultura$Year)
+
+```
+ótimo. Temos 3 anos na análise. Agora vamos verificar os valores únicos das Commodities.
+
+```{r}
+
+unique(dados_agricultura$Commodity)
+
+```
+Agora a situação ficou um pouco mais complicada.Temos 2 problemas:
+
+1) Nossos dados não estão devidamente tratados. Existem Commodities com mesmo nome porém uns escritos em maiuscula e outros em minusculo. Vamos padronizar! No nosso exemplo deixarei tudo minusculo.
+
+2) Existem muitas commodities. Para plotar esses dados teremos problemas da forma como está. Nesse caso podemos avaliar as commodities com maiores relevâncias (mais ocorrências) visto que estamos compras em diferentes períodos. 
+
+Vamos então tratar nossos dados.
+
+```{r}
+
+dados_agricultura$Commodity<- tolower(dados_agricultura[,c('Commodity')])
+
+dados_agricultura_agrupados <- dados_agricultura %>% 
+                              group_by(Commodity=tolower(Commodity)) %>% 
+                              summarise(Quantidade=n()) 
+
+dados_agricultura_agrupados <- dados_agricultura_agrupados[order(dados_agricultura_agrupados$Quantidade, decreasing = TRUE),]  
+
+dados_agricultura_agrupados
+```
+Agora vamos filtrar no nosso dataset original. Para esse exemplo vamos considerar as 15 Commodities com mais ocorrências.
+
+```{r}
+
+quantidade <- 15
+
+commodities<- head(dados_agricultura_agrupados[,c('Commodity')], n = quantidade)
+
+dados_agricultura_filtrados <- dados_agricultura[dados_agricultura$Commodity %in% commodities$Commodity,]
+
+dados_agricultura_filtrados
+```
+Perfeito, finalizamos nossos tratamentos iniciais. Podemos inicializar a análise. A análise de Correspondência inicia primeiramente com uma tabela de frequência com nossas duas variáveis.
+
+```{r}
+
+tabela_frequencia <- table(dados_agricultura_filtrados$Commodity, 
+                           dados_agricultura_filtrados$Year)
+
+tabela_frequencia
+```
+
+Agora temos que avaliar se nossas variáveis não se relacionam de forma aleatória.Para isso vamos utilizar da nossa tabela de frequência para descobrir nosso teste estátistico chi2. Para o exemplo utilizaremos um nível de significância de 0.05% (Padrão, 5%). Se o p-value for inferior à esse nível, podemos aceitar a hipótese alternativa.
+
+```{r}
+
+qui2 <- chisq.test(tabela_frequencia)
+qui2
+
+```
+Confirmamos que nossas variáveis não se relacionam de forma aleatória. Portanto podemos prosseguir. 
+
+Agora avaliaremos como as categorias presentes na nossa amostra se relacionam através dos resíduos padronizados ajustados. 
+
+
+Relações positivas no nível de significância de 5% devem ser maiores que 1,96 positivos. Para maiores detalhes e valores para outros níveis consultar uma tabela z.
+
+Ex: Se a compra de cebolas (Onion) foi grande no ano de 2016, a relação será positiva,
+
+```{r}
+
+data.frame(qui2$stdres) %>%
+  rename(country = 1,
+         let_q5 = 2) %>% 
+  ggplot(aes(x = country, y = let_q5, fill = Freq, label = round(Freq,3))) +
+  geom_tile() +
+  geom_text(size = 3, angle = 90) +
+  scale_fill_gradient2(low = "#440154FF", 
+                       mid = "white", 
+                       high = "#FDE725FF",
+                       midpoint = 0) +
+  labs(x = NULL, y = NULL) +
+  theme(legend.title = element_blank(), 
+        panel.background = element_rect("white"),
+        legend.position = "none",
+        axis.text.x = element_text(angle = 90))
+
+```
+OBS: Ao interpretar um mapa perceptual, utilizar sempre a tabela de resíduos proveniente. Em casos onde se há muitas dimensões geradas, Podem haver erros ao interpretar o mapa, visto que ele é somente bidimensional.
+
+Agora vamos rodar nossa análise de correspondência.
+
+```{r}
+
+anacor <- CA(tabela_frequencia)
+```
+Verificando os autovalores gerados
+
+```{r}
+
+anacor$eig
+
+```
+Coordenadas das linhas (Commodity)
+
+```{r}
+
+anacor$row$coord
+
+```
+Coordenadas das colunas (Anos)
+
+```{r}
+
+anacor$col$coord
+
+```
+Como as coordenadas são dadas em objetos separados, vamos unir todas em um único objeto.
+
+```{r}
+
+coordenadas_linhas_colunas <- rbind(anacor$row$coord, anacor$col$coord)
+coordenadas_linhas_colunas
+
+```
+
+Otimo. Falta pouco para montarmos nosso mapa. Mas agora que juntamos tudo num único objeto como o algortimo saberá o que é linha e coluna? Vamos adicionar essas informações com base na nossa base de dados filtrada.
+
+
+```{r}
+
+quantidade_categorias <- apply(dados_agricultura_filtrados[,c('Commodity','Year')],
+                               MARGIN =  2,
+                               FUN = function(x) nlevels(as.factor(x)))
+
+quantidade_categorias
+```
+Juntando todas as informações no mesmo objeto.
+
+```{r}
+
+coordenadas_linhas_colunas <- data.frame(coordenadas_linhas_colunas, 
+                                    variavel = rep(names(quantidade_categorias), quantidade_categorias))
+
+coordenadas_linhas_colunas
+```
+Vamos ver como ficou nosso mapa perceptual
+
+```{r}
+
+coordenadas_linhas_colunas %>% 
+  rownames_to_column() %>% 
+  rename(Category = 1) %>% 
+  ggplot(aes(x = Dim.1, 
+             y = Dim.2, 
+             label = Category, 
+             color = variavel, 
+             shape = variavel)) +
+  geom_point(size = 2) +
+  geom_text_repel(max.overlaps = 100,
+                  size = 3) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
+  labs(x = paste("Dimensão 1:", paste0(round(anacor$eig[1,2], digits = 2), "%")),
+       y = paste("Dimensão 2:", paste0(round(anacor$eig[2,2], digits = 2), "%"))) +
+  scale_color_viridis_d(option = "viridis") +
+  theme(panel.background = element_rect("white"),
+        panel.border = element_rect("NA"),
+        panel.grid = element_line("gray95"),
+        legend.position = "none")
+
+```
